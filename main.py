@@ -3,13 +3,11 @@ from pyglet.gl import *
 import numpy as np
 from math import sqrt, cos, sin, e, pi, floor
 from random import random, randint
-import scipy
-from scipy.integrate import quad
-
+import sys, getopt
 
 class Vector():
-    def __init__(self, speedm=1, scale=100, c=complex(1, 0)):
-        self.speedm = speedm
+    def __init__(self, frequency=1, scale=100, c=complex(1, 0)):
+        self.frequency = frequency
         self.scale = scale
 
         # This costants can be expressed by c
@@ -26,12 +24,12 @@ class Vector():
     def update(self, t, offset=complex(0, 0)):
         self.offset = offset
 
-        # Using euler's formula, much cleaner
+        # Using euler's rappresentation, much cleaner and cooler tbh
         self.p = self.c * \
-            e**complex(0, 2*pi*t*self.speedm) + self.offset
+            e**complex(0, 2*pi*t*self.frequency) + self.offset
 
         # self.p = (complex(self.r, 0)) * complex(cos((angle + self.init_angle) *
-        #                                             self.speedm), sin((angle + self.init_angle)*self.speedm)) + self.offset
+        #                                             self.frequency), sin((angle + self.init_angle)*self.frequency)) + self.offset
         self.x, self.y = self.p.real*self.scale, self.p.imag*self.scale
 
     def draw(self):
@@ -46,77 +44,58 @@ class Vector():
         )
         glEnd()
 
-
-WSIZE = WIDHT, HEIGHT = (800, 800)
-window = pyglet.window.Window(WIDHT, HEIGHT)
-
-t = 0
-
-# drawing = []
-# maxx, maxy = 0, 0
-drawing = np.array([[0, 0]])
-
-with open("points3.txt") as f:
-    for line in f.readlines():
-        if line != "":
-            x, y = line.rstrip("\n").split(",")
-            drawing = np.vstack([drawing, [[float(x), float(y)]]])
-
-            # drawing.append([float(x), float(y)])
-
-# print(max(drawing, axis=0))
-# for i, d in enumerate(drawing):
-#     drawing[i] = [d[0] / maxx, d[1] / maxy]
-
-# print(maxx, maxy)
-# print(drawing[1:].max(axis=0))
-drawing = (drawing[1:] - drawing[1:].max(axis=0) / 2) / drawing[1:].max(axis=0)
-# print(drawing[1:].max(axis=0))
-
-
+# Maps the points of the drawing to a function
 def drawFromTXT(t):
     # T Ranges from 0 to 1
     l = len(drawing)
     index = floor(t*l) - 1
-    # print(index, l)
-    # print(drawing[index])
-    # print()
 
     return complex(drawing[index][0], -drawing[index][1])
 
+def importTXT(filename):
+    drawing = np.array([[0, 0]])
 
-vectors = []
-ns = 300
-for n in sorted(range(-ns//2, ns//2+1), key=abs):
-    speed = n
+    # A list of point in format x,y
+    # I absolutely recommend the use of https://github.com/Shinao/PathToPoints 
+    with open(filename) as f:
+        for line in f.readlines():
+            if line != "":
+                x, y = line.rstrip("\n").split(",")
+                drawing = np.vstack([drawing, [[float(x), float(y)]]])
 
-    # re, err = quad(lambda t: ((e**complex(-2*pi*n*t))
-    #                           * drawFromTXT(t)).real, 0, 1)
-    # img, err = quad(lambda t: ((e**complex(-2*pi*n*t))
-    #                            * drawFromTXT(t)).imag, 0, 1)
+    # Normalizing and shifting the list of points
+    drawing = (drawing[1:] - drawing[1:].max(axis=0) / 2) / drawing[1:].max(axis=0)
+    return drawing
 
-    c = sum([(e**complex(0, -2*pi*n*t))
-             * drawFromTXT(t) for t in np.linspace(0, 1, 1000)])
 
-    # r = complex_quadrature(
-    #     lambda t: (e**complex(-2*pi*n*t))*drawFromTXT(t), 0, 1)
-    vectors.append(Vector(speedm=speed, scale=0.3, c=c))
-    # print(speed, c)
+# Finding all the parameters for each vector
+# Probably the coolest part of the project
+def init_vectors(nn, steps=1000, scale=0.5):
+    vectors = []
+    for n in range(-nn//2, nn//2+1):
+        # C(n) = Intgr 0 -> 1 (f(t)e**(-n*2pi*i*t))
+        # Finding magnitude and initial angle of the vector
+        c = sum([(e**complex(0, -2*pi*n*t))
+                * drawFromTXT(t) for t in np.linspace(0, 1, steps)])
+
+        vectors.append(Vector(frequency=n, scale=scale, c=c))
+
+    vectors = sorted(vectors, key=lambda v: -(v.c.real**2 + v.c.imag**2))
+    return vectors
+
+# A random setup for the vector
+# vectors = [
+#     Vector(frequency=i, scale=150, c=complex(1/i, 0)*e**complex(0, random()*2*pi)) for i in range(1, 50)
+# ]
 
 points = np.array([[0, 0]])
-# print(points.shape)
+t = 0
 
-# vectors = [
-#     Vector(speedm=i, scale=150, c=complex(1/i, 0)*e**complex(0, random()*2*pi)) for i in range(1, 50)
-# ]
-# C(n) = Intgr 0 -> 1 (f(t)e**(-n*2pi*i*t))
-
-
-def on_draw(dt):
+def main_loop(dt, drawing, vectors, speed):
     window.clear()
     global t, points
 
-    t += 0.1 * dt
+    t += speed * dt
 
     for i, vector in enumerate(vectors):
         if i == 0:
@@ -127,14 +106,25 @@ def on_draw(dt):
         vector.draw()
 
     points = np.vstack([points, [[vectors[-1].x, vectors[-1].y]]])
-    pyglet.graphics.draw(len(points)-2, pyglet.gl.GL_LINE_STRIP,
-                         ('v2f', (shift_coord(points[2:])).flatten()))
+    
+    # On some setups GL_LINE_STRIP will throw an error, idk yet what it is causing it, in the meantime here it is a simple fix
+    try:
+        pyglet.graphics.draw(len(points)-1, pyglet.gl.GL_LINE_STRIP, ('v2f', (points[1:] + np.array([WIDHT/2, HEIGHT/2])).flatten()))
+    except:
+        pyglet.graphics.draw(len(points)-1, pyglet.gl.GL_POINTS, ('v2f', (points[1:] + np.array([WIDHT/2, HEIGHT/2])).flatten()))
 
 
-def shift_coord(points, offset=[WIDHT/2, HEIGHT/2]):
-    return points + np.array(offset)
+if __name__ == "__main__":
+    FPS = 60
+    WSIZE = WIDHT, HEIGHT = (800, 800)
+    FILENAME = "./img.txt"
+    N_VECTORS = 200
+    SCALE = 0.5
+    SPEED = 0.05
 
+    drawing = importTXT(FILENAME)
+    vectors = init_vectors(nn=N_VECTORS, steps=1000, scale=SCALE)
 
-pyglet.clock.schedule_interval(on_draw, 1/144)
-
-pyglet.app.run()
+    window = pyglet.window.Window(WIDHT, HEIGHT)
+    pyglet.clock.schedule_interval(main_loop, 1/FPS, drawing, vectors, SPEED)
+    pyglet.app.run()
